@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: nix flake check (${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            system: x86_64-linux
+          - runner: macos-15
+            system: aarch64-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/nix-setup
+        with:
+          cachix-cache: ${{ vars.CACHIX_CACHE }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Verify runner architecture
+        env:
+          EXPECTED_SYSTEM: ${{ matrix.system }}
+        run: |
+          set -euo pipefail
+          actual="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          if [[ "$actual" != "$EXPECTED_SYSTEM" ]]; then
+            echo "::error::Expected $EXPECTED_SYSTEM, got $actual" >&2
+            exit 1
+          fi
+
+      - name: Check flake
+        run: nix flake check --print-build-logs
+
+      - name: Check diff hygiene
+        run: git diff --check
