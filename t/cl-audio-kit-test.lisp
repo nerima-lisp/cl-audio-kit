@@ -107,7 +107,7 @@
             (expect (write-frames stream samples) :to-be 1)
             (expect (recorded-samples device) :to-equalp (list samples)))
         (close-output-stream stream))))
-          (it "serializes PortAudio abort and close while leaving blocking writes interruptible"
+          (it "serializes PortAudio abort and close without taking the write lock"
               (let* ((stream (cl-audio-kit::%make-output-stream
                               :backend :portaudio
                               :foreign-stream (sb-sys:int-sap 0)

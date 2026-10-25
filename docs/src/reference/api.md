@@ -23,11 +23,11 @@ output device. Pass a recording device from `make-recording-device` to capture
 writes in memory instead of opening audio hardware. `frames-per-buffer` is
 passed to PortAudio; it must be a non-negative fixnum, and zero leaves the
 buffer size unspecified. `sample-rate` must be a positive finite real value
-that converts to a finite double float. `channels` must be a positive integer;
-PortAudio also checks that the default output device supports that count.
-`sample-format` must be `:float32` or `:int16`. To choose a physical output,
-select it as the operating system's default before opening the stream; this
-API does not select devices by name or index.
+that remains positive and finite when converted to a double float. `channels`
+must be a positive integer no greater than 2147483647; PortAudio also checks
+that the default output device supports that count. `sample-format` must be
+`:float32` or `:int16`. This API does not select hardware devices by name or
+index.
 
 ### `write-frames`
 
@@ -49,12 +49,24 @@ by the stream's channel count.
 (abort-output-stream stream)
 ```
 
-Requests immediate termination of a PortAudio stream. Call this from another
-thread to interrupt a `write-frames` call that is blocked in PortAudio. It does
-not close the stream; call `close-output-stream` afterward to release its
+Calling `abort-output-stream` from another thread attempts to interrupt a
+`write-frames` call blocked in PortAudio. PortAudio leaves the thread safety of
+this concurrent call unspecified and platform-dependent, so it is not
+guaranteed safe on every backend. A host API is PortAudio's platform-specific
+audio backend, such as CoreAudio or JACK. For a PortAudio stream opened with
+`:device nil`, this library opens PortAudio's default output device. PortAudio
+chooses the host API for that device, but this library does not report which one.
+An external PortAudio program can inspect it with `Pa_GetDefaultOutputDevice`,
+`Pa_GetDeviceInfo`, and `Pa_GetHostApiInfo`. In PortAudio 19.7.0, the CoreAudio
+backend interrupts the blocked write, while the JACK backend waits for queued
+output to drain before aborting. The PortAudio build supplied by this
+repository's Nix flake is 19.7.0, but `CL_AUDIO_KIT_PORTAUDIO_LIBRARY` can load
+a different build. This call
+does not close the stream; call `close-output-stream` afterward to release its
 resources. Writes to an aborted PortAudio stream signal `audio-error`.
-Recording streams are unaffected and remain writable. PortAudio errors signal
-`audio-error`.
+Further calls to `abort-output-stream` after a successful abort have no effect.
+Calling it on a closed stream also has no effect. Recording streams are
+unaffected and remain writable.
 
 ### `close-output-stream`
 
@@ -88,7 +100,7 @@ Returns output latency in seconds. A recording stream reports zero.
 ```
 
 Returns the number of frames that can be written without waiting, or `NIL` for
-a recording stream. Signals `audio-error` if PortAudio reports an error.
+a recording stream.
 
 ### Conditions
 
@@ -98,9 +110,12 @@ If the PortAudio shared library cannot be loaded, opening a hardware stream
 signals `audio-library-unavailable`. Other PortAudio failures signal
 `audio-error`. `write-frames` and
 `stream-write-available` signal `audio-error` when used after the stream is
-closed. Invalid sample-rate, channel-count, sample-format, sample-vector, or
-device types and ranges signal `type-error`. A sample count that does not form
-whole frames or an invalid `frames-per-buffer` value signals `simple-error`.
+closed. Passing a value that is not an `output-stream` to a stream operation or
+not a `recording-device` to a recording-device operation signals `type-error`.
+Invalid types or ranges for sample-rate, channel-count, sample-format, sample
+vector, or the `device` argument also signal `type-error`. A sample count that
+does not form whole frames or an invalid `frames-per-buffer` value signals
+`simple-error`.
 
 ## Recording device
 
