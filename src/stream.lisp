@@ -143,71 +143,91 @@
   (unless (%output-stream-p stream)
     (error 'type-error :datum (type-of stream) :expected-type 'output-stream))
   (let* ((frames
-          (%validate-samples samples
-                             (output-stream-sample-format stream)
-                             (output-stream-channels stream)))
+           (%validate-samples samples
+                              (output-stream-sample-format stream)
+                              (output-stream-channels stream)))
          (lock (output-stream-lock stream)))
     (sb-thread:with-mutex (lock)
-                          (%require-open-stream stream)
-                          (ecase (output-stream-backend stream)
-                            (:recording
-                              (%append-recorded-samples
-                               (output-stream-recording-device stream)
-                               samples)
-                              frames)
-                            (:portaudio
-                              (unless (zerop frames)
-                                (%write-portaudio-stream
-                                 (output-stream-foreign-stream stream)
-                                 samples
-                                 frames))
-                              frames)))))
+      (%require-open-stream stream)
+      (ecase (output-stream-backend stream)
+        (:recording
+         (%append-recorded-samples
+          (output-stream-recording-device stream)
+          samples)
+         frames)
+        (:portaudio
+         (unless (zerop frames)
+           (let ((sap
+                   (sb-thread:with-mutex
+                       ((output-stream-lifecycle-lock stream))
+                     (when (output-stream-aborted-p stream)
+                       (error 'audio-error
+                              :operation "Pa_WriteStream"
+                              :detail "The output stream has been aborted."))
+                     (output-stream-foreign-stream stream))))
+             (%write-portaudio-stream sap samples frames)))
+         frames)))))
 
 (defun close-output-stream (stream)
   (unless (%output-stream-p stream)
     (error 'type-error :datum (type-of stream) :expected-type 'output-stream))
   (let ((lock (output-stream-lock stream)))
     (sb-thread:with-mutex (lock)
-                          (unless (output-stream-closed-p stream)
-                            (let ((errors nil))
-                              (when
-                                  (eq (output-stream-backend stream) :portaudio)
-                                (when (output-stream-started-p stream)
-                                  (push
-                                   (%cleanup-attempt
-                                    (lambda ()
-                                      (%stop-portaudio-stream
-                                       (output-stream-foreign-stream stream))))
-                                   errors)
-                                  (setf (output-stream-started-p stream) nil))
-                                (unless
-                                    (%null-sap-p
-                                     (output-stream-foreign-stream stream))
-                                  (push
-                                   (%cleanup-attempt
-                                    (lambda ()
-                                      (%close-portaudio-stream
-                                       (output-stream-foreign-stream stream))))
-                                   errors)
-                                  (setf (output-stream-foreign-stream stream) (sb-sys:int-sap
-                                                                               0)))
-                                (when (output-stream-runtime-acquired-p stream)
-                                  (push (%cleanup-attempt #'%release-portaudio)
-                                        errors)
-                                  (setf (output-stream-runtime-acquired-p
-                                         stream) nil)))
-                              (setf (output-stream-closed-p stream) t)
-                              (let ((errors (remove nil (nreverse errors))))
-                                (when errors
-                                  (%signal-cleanup-errors "close-output-stream"
-                                                          "PortAudio stream cleanup failed."
-                                                          errors))))))
-    stream))
+      (sb-thread:with-mutex ((output-stream-lifecycle-lock stream))
+        (unless (output-stream-closed-p stream)
+          (let ((errors nil))
+            (when (eq (output-stream-backend stream) :portaudio)
+              (when (output-stream-started-p stream)
+                (push (%cleanup-attempt
+                       (lambda ()
+                         (%stop-portaudio-stream
+                          (output-stream-foreign-stream stream))))
+                      errors)
+                (setf (output-stream-started-p stream) nil))
+              (unless (%null-sap-p (output-stream-foreign-stream stream))
+                (push (%cleanup-attempt
+                       (lambda ()
+                         (%close-portaudio-stream
+                          (output-stream-foreign-stream stream))))
+                      errors)
+                (setf (output-stream-foreign-stream stream)
+                      (sb-sys:int-sap 0)))
+              (when (output-stream-runtime-acquired-p stream)
+                (push (%cleanup-attempt #'%release-portaudio) errors)
+                (setf (output-stream-runtime-acquired-p stream) nil)))
+            (setf (output-stream-closed-p stream) t)
+            (let ((errors (remove nil (nreverse errors))))
+              (when errors
+                (%signal-cleanup-errors
+                 "close-output-stream"
+                 "PortAudio stream cleanup failed."
+                 errors)))))))
+  stream))
 
 (defun stream-latency (stream)
   (unless (%output-stream-p stream)
     (error 'type-error :datum (type-of stream) :expected-type 'output-stream))
   (output-stream-latency stream))
+(defun abort-output-stream (stream)
+  (unless (%output-stream-p stream)
+    (error 'type-error :datum (type-of stream) :expected-type 'output-stream))
+  ;; Do not take output-stream-lock: write-frames holds it while Pa_WriteStream blocks.
+  (sb-thread:with-mutex ((output-stream-lifecycle-lock stream))
+    (when (and (not (output-stream-closed-p stream))
+               (eq (output-stream-backend stream) :portaudio)
+               (output-stream-started-p stream))
+      (let ((sap (output-stream-foreign-stream stream)))
+        (setf (output-stream-aborted-p stream) t
+              (output-stream-started-p stream) nil)
+        (handler-case
+            (funcall (or (output-stream-abort-function stream)
+                         #'%abort-portaudio-stream)
+                     sap)
+          (error (condition)
+            (setf (output-stream-aborted-p stream) nil
+                  (output-stream-started-p stream) t)
+            (error condition))))))
+  stream)
 
 (defun stream-write-available (stream)
   (unless (%output-stream-p stream)

@@ -32,7 +32,7 @@ passed to `cl-nix-forge.lib.<system>.mkPackageFlake`:
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     cl-nix-forge.url = "github:nerima-lisp/cl-nix-forge/v0.5.0";
     cl-nix-forge.inputs.nixpkgs.follows = "nixpkgs";
-    cl-audio-kit.url = "github:nerima-lisp/cl-audio-kit/v0.1.0";
+    cl-audio-kit.url = "github:nerima-lisp/cl-audio-kit/v0.1.1";
     cl-audio-kit.inputs.nixpkgs.follows = "nixpkgs";
   };
 

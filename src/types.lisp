@@ -16,6 +16,10 @@
   (foreign-stream (sb-sys:int-sap 0))
   (latency 0d0)
   (started-p nil)
+  (aborted-p nil)
   (runtime-acquired-p nil)
   (closed-p nil)
-  (lock (sb-thread:make-mutex :name "cl-audio-kit output stream")))
+  (abort-function nil :type (or null function))
+  (lock (sb-thread:make-mutex :name "cl-audio-kit output stream"))
+  (lifecycle-lock
+   (sb-thread:make-mutex :name "cl-audio-kit output stream lifecycle")))

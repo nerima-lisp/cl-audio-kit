@@ -37,6 +37,9 @@
 (sb-alien:define-alien-routine ("Pa_StopStream" %pa-stop-stream)
                                sb-alien:int
                                (stream sb-alien:system-area-pointer))
+(sb-alien:define-alien-routine ("Pa_AbortStream" %pa-abort-stream)
+                               sb-alien:int
+                               (stream sb-alien:system-area-pointer))
 
 (sb-alien:define-alien-routine ("Pa_CloseStream" %pa-close-stream)
                                sb-alien:int
@@ -266,6 +269,9 @@
 (defun %stop-portaudio-stream (sap)
   (check-portaudio-status "Pa_StopStream"
                           (%with-portaudio-call (%pa-stop-stream sap))))
+(defun %abort-portaudio-stream (sap)
+  (check-portaudio-status "Pa_AbortStream"
+                          (%with-portaudio-call (%pa-abort-stream sap))))
 
 (defun %close-portaudio-stream (sap)
   (check-portaudio-status "Pa_CloseStream"

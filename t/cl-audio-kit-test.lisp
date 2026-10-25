@@ -78,25 +78,116 @@
                        t))
                   (close-output-stream stream))))
           (it "preserves multiple writes in order and returns each frame count"
-              (let* ((device (make-recording-device))
-                     (first-write (%float32-vector 0.1s0 -0.1s0))
-                     (second-write (%float32-vector 0.2s0 -0.2s0 0.3s0 -0.3s0))
-                     (expected-first (copy-seq first-write))
-                     (expected-second (copy-seq second-write))
-                     (stream (open-output-stream :device device :channels 2)))
-                (unwind-protect
-                    (progn
-                      (expect (write-frames stream first-write) :to-be 1)
-                      (expect (write-frames stream second-write) :to-be 2)
-                      (expect (recorded-samples device)
-                              :to-equalp
-                              (list expected-first expected-second)))
-                  (close-output-stream stream))))
+    (let* ((device (make-recording-device))
+           (first-write (%float32-vector 0.1s0 -0.1s0))
+           (second-write (%float32-vector 0.2s0 -0.2s0 0.3s0 -0.3s0))
+           (expected-first (copy-seq first-write))
+           (expected-second (copy-seq second-write))
+           (stream (open-output-stream :device device :channels 2)))
+      (unwind-protect
+          (progn
+            (expect (write-frames stream first-write) :to-be 1)
+            (expect (write-frames stream second-write) :to-be 2)
+            (expect (recorded-samples device)
+                    :to-equalp
+                    (list expected-first expected-second)))
+        (close-output-stream stream))))
           (it "allows repeated close calls"
               (let* ((device (make-recording-device))
                      (stream (open-output-stream :device device)))
                 (close-output-stream stream)
                 (close-output-stream stream)))
+          (it "leaves recording streams usable after abort"
+    (let* ((device (make-recording-device))
+           (samples (%float32-vector 0.5s0))
+           (stream (open-output-stream :device device)))
+      (unwind-protect
+          (progn
+            (expect (eq (abort-output-stream stream) stream) :to-be t)
+            (expect (write-frames stream samples) :to-be 1)
+            (expect (recorded-samples device) :to-equalp (list samples)))
+        (close-output-stream stream))))
+          (it "serializes PortAudio abort and close while leaving blocking writes interruptible"
+              (let* ((stream (cl-audio-kit::%make-output-stream
+                              :backend :portaudio
+                              :foreign-stream (sb-sys:int-sap 0)
+                              :started-p t))
+                     (abort-started (sb-thread:make-semaphore))
+                     (allow-abort (sb-thread:make-semaphore))
+                     (close-started (sb-thread:make-semaphore))
+                     (close-finished (sb-thread:make-semaphore))
+                     (abort-thread nil)
+                     (close-thread nil))
+                (setf (cl-audio-kit::output-stream-abort-function stream)
+                      (lambda (sap)
+                        (declare (ignore sap))
+                        (sb-thread:signal-semaphore abort-started)
+                        (sb-thread:wait-on-semaphore allow-abort)))
+                (unwind-protect
+                    (progn
+                      (sb-thread:with-mutex ((cl-audio-kit::output-stream-lock stream))
+                                            (setf abort-thread
+                                                  (sb-thread:make-thread
+                                                   (lambda () (abort-output-stream stream))))
+                                            (expect (sb-thread:wait-on-semaphore abort-started :timeout 1)
+                                                    :to-be-truthy))
+                      (setf close-thread
+                            (sb-thread:make-thread
+                             (lambda ()
+                               (sb-thread:signal-semaphore close-started)
+                               (prog1 (close-output-stream stream)
+                                 (sb-thread:signal-semaphore close-finished)))))
+                      (expect (sb-thread:wait-on-semaphore close-started :timeout 1)
+                              :to-be-truthy)
+                      (expect (sb-thread:wait-on-semaphore close-finished :timeout 0.05)
+                              :to-be nil)
+                      (sb-thread:signal-semaphore allow-abort)
+                      (expect (eq (sb-thread:join-thread abort-thread
+                                                         :timeout 5
+                                                         :default :timed-out)
+                                  stream)
+                              :to-be t)
+                      (expect (eq (sb-thread:join-thread close-thread
+                                                         :timeout 5
+                                                         :default :timed-out)
+                                  stream)
+                              :to-be t)
+                      (expect (cl-audio-kit::output-stream-aborted-p stream)
+                              :to-be t)
+                      (expect (cl-audio-kit::output-stream-closed-p stream)
+                              :to-be t)
+                      (let ((aborted-stream
+                             (cl-audio-kit::%make-output-stream
+                              :backend :portaudio
+                              :channels 1
+                              :sample-format :float32
+                              :aborted-p t))
+                            (samples (make-array 1
+                                                 :element-type 'single-float
+                                                 :initial-element 0.0f0)))
+                        (expect (%signals-condition-p 'cl-audio-kit:audio-error (lambda () (write-frames aborted-stream samples)))
+                                :to-be-truthy))
+                      (let ((failed-stream
+                             (cl-audio-kit::%make-output-stream
+                              :backend :portaudio
+                              :foreign-stream (sb-sys:int-sap 0)
+                              :started-p t)))
+                        (setf (cl-audio-kit::output-stream-abort-function failed-stream)
+                              (lambda (sap)
+                                (declare (ignore sap))
+                                (error 'audio-error :operation "Pa_AbortStream")))
+                        (expect (%signals-condition-p 'cl-audio-kit:audio-error (lambda () (abort-output-stream failed-stream)))
+                                :to-be-truthy)
+                        (expect (cl-audio-kit::output-stream-aborted-p failed-stream)
+                                :to-be nil)
+                        (expect (cl-audio-kit::output-stream-started-p failed-stream)
+                                :to-be t)))
+                  (sb-thread:signal-semaphore allow-abort)
+                  (when abort-thread
+                    (sb-thread:join-thread abort-thread :timeout 5))
+                  (when close-thread
+                    (sb-thread:join-thread close-thread :timeout 5))
+                  (close-output-stream stream))))
           (it "closes the stream when the body exits nonlocally"
               (let ((device (make-recording-device))
                     (opened-stream nil)

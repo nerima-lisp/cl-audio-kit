@@ -6,6 +6,7 @@
    #:audio-library-unavailable
    #:open-output-stream
    #:write-frames
+   #:abort-output-stream
    #:close-output-stream
    #:with-output-stream
    #:stream-latency

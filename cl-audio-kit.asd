@@ -1,6 +1,6 @@
 (asdf:defsystem "cl-audio-kit"
   :description "Common Lisp audio output through PortAudio"
-  :version "0.1.0"
+  :version "0.1.1"
   :license "MIT"
   :serial t
   :components

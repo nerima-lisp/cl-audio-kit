@@ -43,6 +43,19 @@ not accepted. For multiple channels, samples are interleaved by frame: the
 first `channels` elements form one frame. The vector length must be divisible
 by the stream's channel count.
 
+### `abort-output-stream`
+
+```lisp
+(abort-output-stream stream)
+```
+
+Requests immediate termination of a PortAudio stream. Call this from another
+thread to interrupt a `write-frames` call that is blocked in PortAudio. It does
+not close the stream; call `close-output-stream` afterward to release its
+resources. Writes to an aborted PortAudio stream signal `audio-error`.
+Recording streams are unaffected and remain writable. PortAudio errors signal
+`audio-error`.
+
 ### `close-output-stream`
 
 ```lisp
